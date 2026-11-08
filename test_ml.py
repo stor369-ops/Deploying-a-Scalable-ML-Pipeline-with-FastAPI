@@ -100,16 +100,55 @@ def test_save_and_load_model_roundtrip(processed, tmp_path):
     assert np.array_equal(inference(model, X_test), inference(loaded, X_test))
 
 
-def test_performance_on_categorical_slice(processed):
-    """Slice metrics are floats in [0, 1]."""
-    X_train, y_train, _, _, encoder, lb, test = processed
-    model = train_model(X_train, y_train)
-    value = test["sex"].iloc[0]
-    metrics = performance_on_categorical_slice(
-        test, "sex", value, CAT_FEATURES, "salary", encoder, lb, model
+class ThresholdModel:
+    """Stub model: predicts 1 when the first (continuous) feature, age, is >= 50.
+
+    This lets a test control the predictions exactly through the age column.
+    """
+
+    def predict(self, X):
+        return (X[:, 0] >= 50).astype(int)
+
+
+def test_performance_on_categorical_slice_expected_values():
+    """Slice metrics match hand-computed values on a small deterministic dataset.
+
+    Male slice: labels [1, 1, 1, 1, 0, 0], predictions [1, 1, 0, 0, 1, 0]
+        TP = 2, FP = 1, FN = 2 -> precision 2/3, recall 1/2, F1 4/7
+    Female slice: labels [1, 0], predictions [0, 1]
+        TP = 0, FP = 1, FN = 1 -> precision 0, recall 0, F1 0
+    """
+    df = pd.DataFrame(
+        {
+            "age": [60, 60, 20, 20, 60, 20, 20, 60],
+            "sex": ["Male"] * 6 + ["Female"] * 2,
+            "salary": [
+                ">50K", ">50K", ">50K", ">50K", "<=50K", "<=50K",
+                ">50K", "<=50K",
+            ],
+        }
     )
-    assert len(metrics) == 3
-    assert all(0.0 <= m <= 1.0 for m in metrics)
+    _, _, encoder, lb = process_data(
+        df, categorical_features=["sex"], label="salary", training=True
+    )
+
+    male = performance_on_categorical_slice(
+        df, "sex", "Male", ["sex"], "salary", encoder, lb, ThresholdModel()
+    )
+    assert male == (
+        pytest.approx(2 / 3),
+        pytest.approx(1 / 2),
+        pytest.approx(4 / 7),
+    )
+
+    female = performance_on_categorical_slice(
+        df, "sex", "Female", ["sex"], "salary", encoder, lb, ThresholdModel()
+    )
+    assert female == (
+        pytest.approx(0.0),
+        pytest.approx(0.0),
+        pytest.approx(0.0),
+    )
 
 
 def test_apply_label():
